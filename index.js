@@ -11,7 +11,9 @@ const port = process.env.PORT || 3000;
 const providerRead = new ethers.providers.JsonRpcProvider(process.env.RPC_READ);
 const providerWrite = new ethers.providers.JsonRpcProvider(process.env.RPC_WRITE);
 const wallet = new ethers.Wallet(process.env.PRIVATE_KEY, providerWrite);
+
 const CONTRACT_ADDRESS = process.env.CONTRACT_ADDRESS;
+const PROOF_API_URL = process.env.PROOF_API_URL;
 
 const ABI = [
   {
@@ -45,26 +47,6 @@ const ABI = [
 const readContract = new ethers.Contract(CONTRACT_ADDRESS, ABI, providerRead);
 const writeContract = new ethers.Contract(CONTRACT_ADDRESS, ABI, wallet);
 
-const waitForProof = async (index, retries = 100, delayMs = 1000) => {
-  for (let attempt = 1; attempt <= retries; attempt++) {
-    const res = await fetch("https://proof-production.up.railway.app/get-proof", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ index })
-    });
-
-    const data = await res.json();
-    if (data.proof_bytes) {
-      return data.proof_bytes;
-    }
-
-    console.log(`🔄 No proof yet for index ${index}, retrying (${attempt}/${retries})...`);
-    await new Promise(r => setTimeout(r, delayMs));
-  }
-
-  throw new Error("Proof not available after retries");
-};
-
 app.get("/execute-range", async (req, res) => {
   const start = parseInt(req.query.start);
   const end = parseInt(req.query.end);
@@ -85,7 +67,32 @@ app.get("/execute-range", async (req, res) => {
       }
 
       const assetIndex = order.assetIndex.toNumber();
-      const proof = await waitForProof(assetIndex);
+
+      let proof = null;
+      let attempt = 0;
+
+      // Retry loop until proof is obtained
+      while (!proof && attempt < 10) {
+        attempt++;
+        const proofRes = await fetch(PROOF_API_URL, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ index: assetIndex })
+        });
+
+        const proofData = await proofRes.json();
+        proof = proofData.proof_bytes;
+
+        if (!proof) {
+          console.log(`❌ Attempt ${attempt}: no proof for order #${i}, retrying...`);
+          await new Promise(r => setTimeout(r, 1000));
+        }
+      }
+
+      if (!proof) {
+        results.push({ orderId: i, status: "failed", reason: "no proof returned" });
+        continue;
+      }
 
       const tx = await writeContract.executePendingOrder(i, proof, { gasLimit: 800000 });
       await tx.wait();
@@ -102,6 +109,5 @@ app.get("/execute-range", async (req, res) => {
 });
 
 app.listen(port, () => {
-  console.log(`🟢 API listening at Moustafa est le goat de cette terre ${port}`);
+  console.log(`🟢 API listening at http://localhost:${port}`);
 });
-
