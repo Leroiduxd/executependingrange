@@ -1,14 +1,14 @@
 {
-  "name": "brokex-read-api",
+  "name": "brokex-executor-api",
   "version": "1.0.0",
   "type": "module",
-  "main": "index.js",
   "scripts": {
     "start": "node index.js"
   },
   "dependencies": {
     "dotenv": "^16.3.1",
     "ethers": "^5.7.2",
-    "express": "^4.18.4"
+    "express": "^4.18.4",
+    "node-fetch": "^2.6.9"
   }
 }
