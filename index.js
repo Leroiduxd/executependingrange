@@ -8,13 +8,9 @@ dotenv.config();
 const app = express();
 const port = process.env.PORT || 3000;
 
-// 📡 RPC lecture et écriture
-const providerRead = new ethers.providers.JsonRpcProvider(process.env.RPC_READ); // read-only
-const providerWrite = new ethers.providers.JsonRpcProvider(process.env.RPC_WRITE); // write-only
-
-// 🔐 Wallet d'exécution
+const providerRead = new ethers.providers.JsonRpcProvider(process.env.RPC_READ);
+const providerWrite = new ethers.providers.JsonRpcProvider(process.env.RPC_WRITE);
 const wallet = new ethers.Wallet(process.env.PRIVATE_KEY, providerWrite);
-
 const CONTRACT_ADDRESS = process.env.CONTRACT_ADDRESS;
 
 const ABI = [
@@ -49,6 +45,26 @@ const ABI = [
 const readContract = new ethers.Contract(CONTRACT_ADDRESS, ABI, providerRead);
 const writeContract = new ethers.Contract(CONTRACT_ADDRESS, ABI, wallet);
 
+const waitForProof = async (index, retries = 100, delayMs = 1000) => {
+  for (let attempt = 1; attempt <= retries; attempt++) {
+    const res = await fetch("https://proof-production.up.railway.app/get-proof", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ index })
+    });
+
+    const data = await res.json();
+    if (data.proof_bytes) {
+      return data.proof_bytes;
+    }
+
+    console.log(`🔄 No proof yet for index ${index}, retrying (${attempt}/${retries})...`);
+    await new Promise(r => setTimeout(r, delayMs));
+  }
+
+  throw new Error("Proof not available after retries");
+};
+
 app.get("/execute-range", async (req, res) => {
   const start = parseInt(req.query.start);
   const end = parseInt(req.query.end);
@@ -69,20 +85,7 @@ app.get("/execute-range", async (req, res) => {
       }
 
       const assetIndex = order.assetIndex.toNumber();
-
-      const proofRes = await fetch("https://proof-production.up.railway.app/get-proof", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ index: assetIndex })
-      });
-
-      const proofData = await proofRes.json();
-      const proof = proofData.proof_bytes;
-
-      if (!proof) {
-        results.push({ orderId: i, status: "failed", reason: "no proof returned" });
-        continue;
-      }
+      const proof = await waitForProof(assetIndex);
 
       const tx = await writeContract.executePendingOrder(i, proof, { gasLimit: 800000 });
       await tx.wait();
