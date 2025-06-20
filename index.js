@@ -1,6 +1,6 @@
 import express from "express";
-import dotenv from "dotenv";
 import { ethers } from "ethers";
+import dotenv from "dotenv";
 import fetch from "node-fetch";
 
 dotenv.config();
@@ -8,11 +8,17 @@ dotenv.config();
 const app = express();
 const port = process.env.PORT || 3000;
 
-const providerRead = new ethers.providers.JsonRpcProvider(process.env.RPC_READ);
-const providerWrite = new ethers.providers.JsonRpcProvider(process.env.RPC_WRITE);
-const wallet = new ethers.Wallet(process.env.PRIVATE_KEY, providerWrite);
-const contractAddress = process.env.CONTRACT_ADDRESS;
+// 📡 RPC lecture et écriture
+const providerRead = new ethers.providers.JsonRpcProvider(process.env.RPC_READ); // read-only
+const providerWrite = new ethers.providers.JsonRpcProvider(process.env.RPC_WRITE); // write-only
 
+// 🔐 Wallet d'exécution
+const wallet = new ethers.Wallet(process.env.PRIVATE_KEY, providerWrite);
+
+// 📄 Adresse du contrat
+const CONTRACT_ADDRESS = process.env.CONTRACT_ADDRESS;
+
+// 📜 ABI du contrat
 const ABI = [
   {
     "inputs": [
@@ -42,9 +48,10 @@ const ABI = [
   }
 ];
 
-const readContract = new ethers.Contract(contractAddress, ABI, providerRead);
-const writeContract = new ethers.Contract(contractAddress, ABI, wallet);
+const readContract = new ethers.Contract(CONTRACT_ADDRESS, ABI, providerRead);
+const writeContract = new ethers.Contract(CONTRACT_ADDRESS, ABI, wallet);
 
+// 🌐 Endpoint GET /execute-range?start=X&end=Y
 app.get("/execute-range", async (req, res) => {
   const start = parseInt(req.query.start);
   const end = parseInt(req.query.end);
@@ -64,27 +71,36 @@ app.get("/execute-range", async (req, res) => {
         continue;
       }
 
-      const proofRes = await fetch(process.env.MULTI_PROOF_API);
+      const proofRes = await fetch("https://multiproof-production.up.railway.app/proof");
       const proofData = await proofRes.json();
-      let proof = proofData.proof;
+      const proof = proofData.proof;
 
       if (!proof) {
         results.push({ orderId: i, status: "failed", reason: "no proof returned" });
         continue;
       }
 
-      if (!proof.startsWith("0x")) {
-        proof = "0x" + proof;
+      // 💥 Tentative d'exécution
+      try {
+        const gasEstimate = await writeContract.estimateGas.executePendingOrder(i, proof);
+        const tx = await writeContract.executePendingOrder(i, proof, {
+          gasLimit: gasEstimate.mul(2),
+        });
+
+        await tx.wait();
+
+        console.log(`✅ Executed order #${i} | Tx: ${tx.hash}`);
+        results.push({ orderId: i, status: "executed", txHash: tx.hash });
+      } catch (execError) {
+        console.error(`❌ Error executing order #${i}:`, execError.reason || execError.message);
+        results.push({
+          orderId: i,
+          status: "error",
+          reason: execError.reason || execError.message,
+        });
       }
 
-      const tx = await writeContract.executePendingOrder(i, proof, { gasLimit: 800000 });
-      await tx.wait();
-
-      console.log(`✅ Executed order #${i} | Tx: ${tx.hash}`);
-      results.push({ orderId: i, status: "executed", txHash: tx.hash });
-
     } catch (err) {
-      console.error(`❌ Error on order #${i}:`, err.reason || err.message);
       results.push({ orderId: i, status: "error", reason: err.reason || err.message });
     }
   }
@@ -93,5 +109,6 @@ app.get("/execute-range", async (req, res) => {
 });
 
 app.listen(port, () => {
-  console.log(`🟢 API ready at http://localhost:${port}`);
+  console.log(`🟢 API listening at http://localhost:${port}`);
 });
+
