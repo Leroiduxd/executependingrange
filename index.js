@@ -13,7 +13,7 @@ const providerWrite = new ethers.providers.JsonRpcProvider(process.env.RPC_WRITE
 const wallet = new ethers.Wallet(process.env.PRIVATE_KEY, providerWrite);
 
 const CONTRACT_ADDRESS = process.env.CONTRACT_ADDRESS;
-const PROOF_API_URL = process.env.PROOF_API_URL;
+const MULTI_PROOF_API = process.env.MULTI_PROOF_API;
 
 const ABI = [
   {
@@ -55,6 +55,18 @@ app.get("/execute-range", async (req, res) => {
     return res.status(400).json({ error: "Invalid 'start' and 'end' params" });
   }
 
+  let proof;
+  try {
+    const proofRes = await fetch(MULTI_PROOF_API);
+    const proofData = await proofRes.json();
+    if (!proofData.proof) {
+      return res.status(500).json({ error: "Proof not returned from multi-proof API" });
+    }
+    proof = proofData.proof;
+  } catch (err) {
+    return res.status(500).json({ error: "Failed to fetch common proof", details: err.message });
+  }
+
   const results = [];
 
   for (let i = start; i <= end; i++) {
@@ -63,33 +75,6 @@ app.get("/execute-range", async (req, res) => {
 
       if (order.user === "0x0000000000000000000000000000000000000000") {
         results.push({ orderId: i, status: "skipped", reason: "deleted" });
-        continue;
-      }
-
-      const assetIndex = order.assetIndex.toNumber();
-      let proof = null;
-      let attempt = 0;
-
-      while (!proof && attempt < 10) {
-        attempt++;
-
-        const proofRes = await fetch(`${PROOF_API_URL}/get_proof`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ pair_indexes: [assetIndex], chain_type: "evm" })
-        });
-
-        const proofData = await proofRes.json();
-        proof = proofData.proof_bytes ? "0x" + proofData.proof_bytes : null;
-
-        if (!proof) {
-          console.log(`❌ Attempt ${attempt} - No proof for order #${i}, retrying...`);
-          await new Promise(r => setTimeout(r, 1000));
-        }
-      }
-
-      if (!proof) {
-        results.push({ orderId: i, status: "failed", reason: "no proof returned" });
         continue;
       }
 
@@ -108,5 +93,5 @@ app.get("/execute-range", async (req, res) => {
 });
 
 app.listen(port, () => {
-  console.log(`🟢 API listening at http://localhost:${port}`);
+  console.log(`🟢 API running at http://localhost:${port}`);
 });
