@@ -8,15 +8,10 @@ dotenv.config();
 const app = express();
 const port = process.env.PORT || 3000;
 
-// 📡 RPC lecture et écriture
 const providerRead = new ethers.providers.JsonRpcProvider(process.env.RPC_READ);
 const providerWrite = new ethers.providers.JsonRpcProvider(process.env.RPC_WRITE);
-
-// 🔐 Wallet d'exécution
 const wallet = new ethers.Wallet(process.env.PRIVATE_KEY, providerWrite);
-
 const CONTRACT_ADDRESS = process.env.CONTRACT_ADDRESS;
-const PROOF_API = process.env.PROOF_API_URL || "https://multiproof-production.up.railway.app/proof";
 
 const ABI = [
   {
@@ -50,6 +45,9 @@ const ABI = [
 const readContract = new ethers.Contract(CONTRACT_ADDRESS, ABI, providerRead);
 const writeContract = new ethers.Contract(CONTRACT_ADDRESS, ABI, wallet);
 
+// Utilitaire d'attente
+const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
+
 app.get("/execute-range", async (req, res) => {
   const start = parseInt(req.query.start);
   const end = parseInt(req.query.end);
@@ -69,20 +67,39 @@ app.get("/execute-range", async (req, res) => {
         continue;
       }
 
-      const proofRes = await fetch(PROOF_API);
-      const proofData = await proofRes.json();
-      const proof = proofData.proof;
+      let proof = null;
+      let retry = 0;
+
+      while (!proof && retry < 5) {
+        try {
+          const proofRes = await fetch("https://multiproof-production.up.railway.app/proof");
+          const proofData = await proofRes.json();
+          if (proofData.proof) {
+            proof = proofData.proof;
+          } else {
+            retry++;
+            await sleep(1000);
+          }
+        } catch {
+          retry++;
+          await sleep(1000);
+        }
+      }
 
       if (!proof) {
-        results.push({ orderId: i, status: "failed", reason: "no proof returned" });
+        results.push({ orderId: i, status: "failed", reason: "no proof after retries" });
         continue;
       }
 
-      const tx = await writeContract.executePendingOrder(i, proof, { gasLimit: 800000 });
+      const gasEstimate = await writeContract.estimateGas.executePendingOrder(i, proof);
+      const tx = await writeContract.executePendingOrder(i, proof, {
+        gasLimit: gasEstimate.mul(2)
+      });
       await tx.wait();
 
       console.log(`✅ Executed order #${i} | Tx: ${tx.hash}`);
       results.push({ orderId: i, status: "executed", txHash: tx.hash });
+
     } catch (err) {
       console.error(`❌ Error executing order #${i}:`, err.reason || err.message);
       results.push({ orderId: i, status: "error", reason: err.reason || err.message });
@@ -95,4 +112,3 @@ app.get("/execute-range", async (req, res) => {
 app.listen(port, () => {
   console.log(`🟢 API listening at http://localhost:${port}`);
 });
-
