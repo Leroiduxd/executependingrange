@@ -67,24 +67,23 @@ app.get("/execute-range", async (req, res) => {
       }
 
       const assetIndex = order.assetIndex.toNumber();
-
       let proof = null;
       let attempt = 0;
 
-      // Retry loop until proof is obtained
       while (!proof && attempt < 10) {
         attempt++;
-        const proofRes = await fetch(PROOF_API_URL, {
+
+        const proofRes = await fetch(`${PROOF_API_URL}/get_proof`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ index: assetIndex })
+          body: JSON.stringify({ pair_indexes: [assetIndex], chain_type: "evm" })
         });
 
         const proofData = await proofRes.json();
-        proof = proofData.proof_bytes;
+        proof = proofData.proof_bytes ? "0x" + proofData.proof_bytes : null;
 
         if (!proof) {
-          console.log(`❌ Attempt ${attempt}: no proof for order #${i}, retrying...`);
+          console.log(`❌ Attempt ${attempt} - No proof for order #${i}, retrying...`);
           await new Promise(r => setTimeout(r, 1000));
         }
       }
