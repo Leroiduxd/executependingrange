@@ -1,6 +1,6 @@
 import express from "express";
-import { ethers } from "ethers";
 import dotenv from "dotenv";
+import { ethers } from "ethers";
 import fetch from "node-fetch";
 
 dotenv.config();
@@ -11,9 +11,7 @@ const port = process.env.PORT || 3000;
 const providerRead = new ethers.providers.JsonRpcProvider(process.env.RPC_READ);
 const providerWrite = new ethers.providers.JsonRpcProvider(process.env.RPC_WRITE);
 const wallet = new ethers.Wallet(process.env.PRIVATE_KEY, providerWrite);
-
-const CONTRACT_ADDRESS = process.env.CONTRACT_ADDRESS;
-const MULTI_PROOF_API = process.env.MULTI_PROOF_API;
+const contractAddress = process.env.CONTRACT_ADDRESS;
 
 const ABI = [
   {
@@ -44,8 +42,8 @@ const ABI = [
   }
 ];
 
-const readContract = new ethers.Contract(CONTRACT_ADDRESS, ABI, providerRead);
-const writeContract = new ethers.Contract(CONTRACT_ADDRESS, ABI, wallet);
+const readContract = new ethers.Contract(contractAddress, ABI, providerRead);
+const writeContract = new ethers.Contract(contractAddress, ABI, wallet);
 
 app.get("/execute-range", async (req, res) => {
   const start = parseInt(req.query.start);
@@ -53,18 +51,6 @@ app.get("/execute-range", async (req, res) => {
 
   if (isNaN(start) || isNaN(end) || start > end) {
     return res.status(400).json({ error: "Invalid 'start' and 'end' params" });
-  }
-
-  let proof;
-  try {
-    const proofRes = await fetch(MULTI_PROOF_API);
-    const proofData = await proofRes.json();
-    if (!proofData.proof) {
-      return res.status(500).json({ error: "Proof not returned from multi-proof API" });
-    }
-    proof = proofData.proof;
-  } catch (err) {
-    return res.status(500).json({ error: "Failed to fetch common proof", details: err.message });
   }
 
   const results = [];
@@ -78,6 +64,19 @@ app.get("/execute-range", async (req, res) => {
         continue;
       }
 
+      const proofRes = await fetch(process.env.MULTI_PROOF_API);
+      const proofData = await proofRes.json();
+      let proof = proofData.proof;
+
+      if (!proof) {
+        results.push({ orderId: i, status: "failed", reason: "no proof returned" });
+        continue;
+      }
+
+      if (!proof.startsWith("0x")) {
+        proof = "0x" + proof;
+      }
+
       const tx = await writeContract.executePendingOrder(i, proof, { gasLimit: 800000 });
       await tx.wait();
 
@@ -85,6 +84,7 @@ app.get("/execute-range", async (req, res) => {
       results.push({ orderId: i, status: "executed", txHash: tx.hash });
 
     } catch (err) {
+      console.error(`❌ Error on order #${i}:`, err.reason || err.message);
       results.push({ orderId: i, status: "error", reason: err.reason || err.message });
     }
   }
@@ -93,5 +93,5 @@ app.get("/execute-range", async (req, res) => {
 });
 
 app.listen(port, () => {
-  console.log(`🟢 API running at http://localhost:${port}`);
+  console.log(`🟢 API ready at http://localhost:${port}`);
 });
