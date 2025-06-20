@@ -2,17 +2,21 @@ import express from "express";
 import { ethers } from "ethers";
 import dotenv from "dotenv";
 import fetch from "node-fetch";
-import pLimit from "p-limit";
 
 dotenv.config();
 
 const app = express();
 const port = process.env.PORT || 3000;
 
+// 📡 RPC lecture et écriture
 const providerRead = new ethers.providers.JsonRpcProvider(process.env.RPC_READ);
 const providerWrite = new ethers.providers.JsonRpcProvider(process.env.RPC_WRITE);
+
+// 🔐 Wallet d'exécution
 const wallet = new ethers.Wallet(process.env.PRIVATE_KEY, providerWrite);
+
 const CONTRACT_ADDRESS = process.env.CONTRACT_ADDRESS;
+const PROOF_API = process.env.PROOF_API_URL || "https://multiproof-production.up.railway.app/proof";
 
 const ABI = [
   {
@@ -46,12 +50,6 @@ const ABI = [
 const readContract = new ethers.Contract(CONTRACT_ADDRESS, ABI, providerRead);
 const writeContract = new ethers.Contract(CONTRACT_ADDRESS, ABI, wallet);
 
-// Limit: 3 appels max par seconde
-const limit = pLimit(3);
-
-// 👇 sleep utilitaire pour gérer les pauses
-const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
-
 app.get("/execute-range", async (req, res) => {
   const start = parseInt(req.query.start);
   const end = parseInt(req.query.end);
@@ -63,40 +61,32 @@ app.get("/execute-range", async (req, res) => {
   const results = [];
 
   for (let i = start; i <= end; i++) {
-    await sleep(150); // 1000 ms / 3 = 333 ms entre chaque appel
+    try {
+      const order = await readContract.pendingOrders(i);
 
-    limit(async () => {
-      try {
-        const order = await readContract.pendingOrders(i);
-
-        if (order.user === "0x0000000000000000000000000000000000000000") {
-          results.push({ orderId: i, status: "skipped", reason: "deleted" });
-          return;
-        }
-
-        const proofRes = await fetch("https://multiproof-production.up.railway.app/proof");
-        const proofData = await proofRes.json();
-        const proof = proofData.proof;
-
-        if (!proof) {
-          results.push({ orderId: i, status: "failed", reason: "no proof returned" });
-          return;
-        }
-
-        const gasEstimate = await writeContract.estimateGas.executePendingOrder(i, proof);
-        const tx = await writeContract.executePendingOrder(i, proof, {
-          gasLimit: gasEstimate.mul(2),
-        });
-
-        await tx.wait();
-        console.log(`✅ Executed order #${i} | Tx: ${tx.hash}`);
-        results.push({ orderId: i, status: "executed", txHash: tx.hash });
-
-      } catch (err) {
-        console.error(`❌ Error executing order #${i}:`, err.reason || err.message);
-        results.push({ orderId: i, status: "error", reason: err.reason || err.message });
+      if (order.user === "0x0000000000000000000000000000000000000000") {
+        results.push({ orderId: i, status: "skipped", reason: "deleted" });
+        continue;
       }
-    });
+
+      const proofRes = await fetch(PROOF_API);
+      const proofData = await proofRes.json();
+      const proof = proofData.proof;
+
+      if (!proof) {
+        results.push({ orderId: i, status: "failed", reason: "no proof returned" });
+        continue;
+      }
+
+      const tx = await writeContract.executePendingOrder(i, proof, { gasLimit: 800000 });
+      await tx.wait();
+
+      console.log(`✅ Executed order #${i} | Tx: ${tx.hash}`);
+      results.push({ orderId: i, status: "executed", txHash: tx.hash });
+    } catch (err) {
+      console.error(`❌ Error executing order #${i}:`, err.reason || err.message);
+      results.push({ orderId: i, status: "error", reason: err.reason || err.message });
+    }
   }
 
   res.json({ total: results.length, results });
