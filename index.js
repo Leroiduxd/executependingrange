@@ -63,7 +63,7 @@ app.get("/execute-range", async (req, res) => {
   const results = [];
 
   for (let i = start; i <= end; i++) {
-    await sleep(333); // 1000 ms / 3 = 333 ms entre chaque appel
+    await sleep(150); // 1000 ms / 3 = 333 ms entre chaque appel
 
     limit(async () => {
       try {
